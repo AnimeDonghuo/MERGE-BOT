@@ -11,7 +11,6 @@ from __init__ import LOGGER
 from helpers.utils import get_path_size
 from helpers.database import getUserAuthorAsync
 from helpers.branding import brand_args, track_names_for_file
-from helpers.subtitle_fit import fit_subtitle, subtitle_codec, video_size
 
 
 async def _run_ffmpeg(cmd: list) -> int:
@@ -112,16 +111,6 @@ async def MergeVideo(input_file: str, user_id: int, message: Message, format_: s
         return None
 
 
-def _subtitle_codec_args(existing_count, new_paths):
-    """Codec per output subtitle stream: existing ones as SRT, new ones as ASS (styled) or SRT."""
-    args = []
-    for k in range(existing_count):
-        args += [f"-c:s:{k}", "srt"]
-    for j, path in enumerate(new_paths):
-        args += [f"-c:s:{existing_count + j}", subtitle_codec(path)]
-    return args
-
-
 async def MergeSub(filePath: str, subPath: str, user_id):
     """
     This is for Merging Video + Subtitle Together.
@@ -138,9 +127,6 @@ async def MergeSub(filePath: str, subPath: str, user_id):
     streams, format_tags = await _in_thread(_probe_streams, filePath)
     author = await getUserAuthorAsync(user_id)
     sub_names = await _in_thread(track_names_for_file, subPath, "subtitle")
-    width, height = video_size(streams)
-    fitted = await fit_subtitle(subPath, width, height)
-    existing_subs = sum(1 for s in streams if s.get("codec_type") == "subtitle")
     brand = brand_args(streams, format_tags, author, added_subs=sub_names)
     muxcmd = [
         "ffmpeg",
@@ -149,7 +135,7 @@ async def MergeSub(filePath: str, subPath: str, user_id):
         "-i",
         filePath,
         "-i",
-        fitted,
+        subPath,
         "-map",
         "0:v:0",
         "-map",
@@ -162,7 +148,8 @@ async def MergeSub(filePath: str, subPath: str, user_id):
         "copy",
         "-c:a",
         "copy",
-        *_subtitle_codec_args(existing_subs, [fitted]),
+        "-c:s",
+        "srt",
         *brand,
         softmuxed,
     ]
@@ -192,18 +179,14 @@ async def MergeSubNew(filePath: str, subPath: str, user_id, file_list, file_name
     LOGGER.info("Generating mux command")
     softmuxed = f"downloads/{str(user_id)}/softmuxed_video.mkv"
     streams, format_tags = await _in_thread(_probe_streams, filePath)
-    width, height = video_size(streams)
     added_subs = []
-    fitted_subs = []
     for position, path in enumerate(file_list[1:], start=1):
         display = file_names[position] if file_names and position < len(file_names) else None
         added_subs += await _in_thread(track_names_for_file, path, "subtitle", display)
-        fitted_subs.append(await fit_subtitle(path, width, height))
-    existing_subs = sum(1 for s in streams if s.get("codec_type") == "subtitle")
     author = await getUserAuthorAsync(user_id)
     brand = brand_args(streams, format_tags, author, added_subs=added_subs)
     muxcmd = ["ffmpeg", "-y", "-hide_banner"]
-    for i in [file_list[0], *fitted_subs]:
+    for i in file_list:
         muxcmd += ["-i", i]
     muxcmd += [
         "-map",
@@ -220,7 +203,8 @@ async def MergeSubNew(filePath: str, subPath: str, user_id, file_list, file_name
         "copy",
         "-c:a",
         "copy",
-        *_subtitle_codec_args(existing_subs, fitted_subs),
+        "-c:s",
+        "srt",
         *brand,
         f"./{softmuxed}",
     ]
