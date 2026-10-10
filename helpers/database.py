@@ -187,3 +187,26 @@ def enableMetadataToggle(uid: int, value: bool):
 
 def disableMetadataToggle(uid: int, value: bool):
     1
+
+
+def getUserAuthor(uid: int):
+    """Author name the user set with /setauthor, or None.
+
+    Stored in its own collection so the merge settings writer cannot overwrite it.
+    """
+    try:
+        doc = Database.mergebot.userBranding.find_one({"_id": uid})
+        return doc.get("author") if doc else None
+    except Exception as e:
+        LOGGER.info(e)
+        return None
+
+
+def setUserAuthor(uid: int, author):
+    """Save the author name, or remove it when `author` is None."""
+    if author:
+        Database.mergebot.userBranding.replace_one(
+            {"_id": uid}, {"_id": uid, "author": author}, upsert=True
+        )
+    else:
+        Database.mergebot.userBranding.delete_one({"_id": uid})

@@ -74,6 +74,7 @@ extract - Extract audios/subtitles from telegram media
 showthumbnail - Shows your thumbnail
 deletethumbnail - Delete your thumbnail
 settings - User Settings to manage different modes
+setauthor - Set the author name written into your merged files (use `clear` to remove)
 help - How to use Bot
 about - About the bot
 login - Access bot

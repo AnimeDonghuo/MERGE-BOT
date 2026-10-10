@@ -32,6 +32,7 @@ from pyrogram.types import CallbackQuery, Message
 async def mergeSub(c: Client, cb: CallbackQuery, new_file_name: str):
     omess = cb.message.reply_to_message
     vid_list = list()
+    name_list = list()  # original file names, aligned with vid_list
     await cb.message.edit("⭕ Processing...")
     duration = 0
     video_mess = queueDB.get(cb.from_user.id)["videos"][0]
@@ -83,12 +84,14 @@ async def mergeSub(c: Client, cb: CallbackQuery, new_file_name: str):
             await cb.message.delete(True)
             continue
         vid_list.append(f"{file_dl_path}")
+        name_list.append(media.file_name)
 
     subbed_video = MergeSubNew(
         filePath=vid_list[0],
         subPath=vid_list[1],
         user_id=cb.from_user.id,
         file_list=vid_list,
+        file_names=name_list,
     )
     _cache = list()
     if subbed_video is None:

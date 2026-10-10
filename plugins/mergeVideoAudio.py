@@ -21,6 +21,7 @@ from pyrogram.types import CallbackQuery, Message
 async def mergeAudio(c: Client, cb: CallbackQuery, new_file_name: str):
     omess = cb.message.reply_to_message
     files_list = []
+    name_list = []  # original file names, aligned with files_list
     await cb.message.edit("⭕ Processing...")
     duration = 0
     video_mess = queueDB.get(cb.from_user.id)["videos"][0]
@@ -72,8 +73,9 @@ async def mergeAudio(c: Client, cb: CallbackQuery, new_file_name: str):
             await cb.message.delete(True)
             continue
         files_list.append(f"{file_dl_path}")
+        name_list.append(media.file_name)
 
-    muxed_video = MergeAudio(files_list[0], files_list, cb.from_user.id)
+    muxed_video = MergeAudio(files_list[0], files_list, cb.from_user.id, file_names=name_list)
     if muxed_video is None:
         await cb.message.edit("❌ Failed to add audio to video !")
         await delete_all(root=f"downloads/{str(cb.from_user.id)}")

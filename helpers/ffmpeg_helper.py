@@ -9,6 +9,28 @@ from config import Config
 from pyrogram.types import Message
 from __init__ import LOGGER
 from helpers.utils import get_path_size
+from helpers.database import getUserAuthor
+from helpers.branding import brand_args, track_names_for_file
+
+
+def _probe_streams(path: str):
+    """(streams, format_tags) for a media file; empty values if probing fails."""
+    try:
+        data = ffmpeg.probe(filename=path)
+        return data.get("streams", []), (data.get("format") or {}).get("tags") or {}
+    except Exception as e:
+        LOGGER.warning(f"Could not probe {path}: {e}")
+        return [], {}
+
+
+def _first_input_of_concat(input_file: str):
+    """Path of the first file listed in an ffmpeg concat list (lines like: file '/path')."""
+    with open(input_file, "r") as fh:
+        for line in fh:
+            line = line.strip()
+            if line.startswith("file "):
+                return line[len("file "):].strip().strip("'")
+    return None
 
 
 async def MergeVideo(input_file: str, user_id: int, message: Message, format_: str):
@@ -20,9 +42,15 @@ async def MergeVideo(input_file: str, user_id: int, message: Message, format_: s
     :param `format_`: Pass File Extension.
     :return: This will return Merged Video File Path
     """
-    output_vid = f"downloads/{str(user_id)}/[@yashoswalyo].{format_.lower()}"
+    output_vid = f"downloads/{str(user_id)}/concat_output.{format_.lower()}"
+    brand = []
+    first_file = _first_input_of_concat(input_file)
+    if first_file:
+        streams, format_tags = _probe_streams(first_file)
+        brand = brand_args(streams, format_tags, getUserAuthor(user_id))
     file_generator_command = [
         "ffmpeg",
+        "-y",  # overwrite a leftover output from an earlier failed run instead of prompting
         "-f",
         "concat",
         "-safe",
@@ -33,6 +61,7 @@ async def MergeVideo(input_file: str, user_id: int, message: Message, format_: s
         "0",
         "-c",
         "copy",
+        *brand,
         output_vid,
     ]
     process = None
@@ -72,47 +101,46 @@ async def MergeSub(filePath: str, subPath: str, user_id):
     returns: Merged Video File Path
     """
     LOGGER.info("Generating mux command")
-    muxcmd = []
-    muxcmd.append("ffmpeg")
-    muxcmd.append("-hide_banner")
-    muxcmd.append("-i")
-    muxcmd.append(filePath)
-    muxcmd.append("-i")
-    muxcmd.append(subPath)
-    muxcmd.append("-map")
-    muxcmd.append("0:v:0")
-    muxcmd.append("-map")
-    muxcmd.append("0:a:?")
-    muxcmd.append("-map")
-    muxcmd.append("0:s:?")
-    muxcmd.append("-map")
-    muxcmd.append("1:s")
-    videoData = ffmpeg.probe(filename=filePath)
-    videoStreamsData = videoData.get("streams")
-    subTrack = 0
-    for i in range(len(videoStreamsData)):
-        if videoStreamsData[i]["codec_type"] == "subtitle":
-            subTrack += 1
-    muxcmd.append(f"-metadata:s:s:{subTrack}")
-    subTrack += 1
-    subTitle = f"Track {subTrack} - tg@yashoswalyo"
-    muxcmd.append(f"title={subTitle}")
-    muxcmd.append("-c:v")
-    muxcmd.append("copy")
-    muxcmd.append("-c:a")
-    muxcmd.append("copy")
-    muxcmd.append("-c:s")
-    muxcmd.append("srt")
-    muxcmd.append(f"./downloads/{str(user_id)}/[@yashoswalyo]_softmuxed_video.mkv")
+    softmuxed = f"./downloads/{str(user_id)}/softmuxed_video.mkv"
+    streams, format_tags = _probe_streams(filePath)
+    brand = brand_args(
+        streams,
+        format_tags,
+        getUserAuthor(user_id),
+        added_subs=track_names_for_file(subPath, "subtitle"),
+    )
+    muxcmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i",
+        filePath,
+        "-i",
+        subPath,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:?",
+        "-map",
+        "0:s:?",
+        "-map",
+        "1:s",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-c:s",
+        "srt",
+        *brand,
+        softmuxed,
+    ]
     LOGGER.info("Muxing subtitles")
     subprocess.call(muxcmd)
-    orgFilePath = shutil.move(
-        f"downloads/{str(user_id)}/[@yashoswalyo]_softmuxed_video.mkv", filePath
-    )
+    orgFilePath = shutil.move(softmuxed, filePath)
     return orgFilePath
 
 
-def MergeSubNew(filePath: str, subPath: str, user_id, file_list):
+def MergeSubNew(filePath: str, subPath: str, user_id, file_list, file_names=None):
     """
     This method is for Merging Video + Subtitle(s) Together.
 
@@ -121,90 +149,89 @@ def MergeSubNew(filePath: str, subPath: str, user_id, file_list):
     - `subPath`: Path to subtitile file.
     - `user_id`: To get parent directory.
     - `file_list`: List of all input files
+    - `file_names`: Original file names of the inputs (same order as `file_list`),
+      used to detect the subtitle language when the file itself has no tag.
 
     returns: Merged Video File Path
     """
     LOGGER.info("Generating mux command")
-    muxcmd = []
-    muxcmd.append("ffmpeg")
-    muxcmd.append("-hide_banner")
-    videoData = ffmpeg.probe(filename=filePath)
-    videoStreamsData = videoData.get("streams")
-    subTrack = 0
-    for i in range(len(videoStreamsData)):
-        if videoStreamsData[i]["codec_type"] == "subtitle":
-            subTrack += 1
+    softmuxed = f"downloads/{str(user_id)}/softmuxed_video.mkv"
+    streams, format_tags = _probe_streams(filePath)
+    added_subs = []
+    for position, path in enumerate(file_list[1:], start=1):
+        display = file_names[position] if file_names and position < len(file_names) else None
+        added_subs += track_names_for_file(path, "subtitle", display)
+    brand = brand_args(streams, format_tags, getUserAuthor(user_id), added_subs=added_subs)
+    muxcmd = ["ffmpeg", "-y", "-hide_banner"]
     for i in file_list:
-        muxcmd.append("-i")
-        muxcmd.append(i)
-    muxcmd.append("-map")
-    muxcmd.append("0:v:0")
-    muxcmd.append("-map")
-    muxcmd.append("0:a:?")
-    muxcmd.append("-map")
-    muxcmd.append("0:s:?")
-    for j in range(1, (len(file_list))):
-        muxcmd.append("-map")
-        muxcmd.append(f"{j}:s")
-        muxcmd.append(f"-metadata:s:s:{subTrack}")
-        muxcmd.append(f"title=Track {subTrack+1} - tg@yashoswalyo")
-        subTrack += 1
-    muxcmd.append("-c:v")
-    muxcmd.append("copy")
-    muxcmd.append("-c:a")
-    muxcmd.append("copy")
-    muxcmd.append("-c:s")
-    muxcmd.append("srt")
-    muxcmd.append(f"./downloads/{str(user_id)}/[@yashoswalyo]_softmuxed_video.mkv")
+        muxcmd += ["-i", i]
+    muxcmd += [
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:?",
+        "-map",
+        "0:s:?",
+    ]
+    for j in range(1, len(file_list)):
+        muxcmd += ["-map", f"{j}:s"]
+    muxcmd += [
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-c:s",
+        "srt",
+        *brand,
+        f"./{softmuxed}",
+    ]
     LOGGER.info("Sub muxing")
     subprocess.call(muxcmd)
-    return f"downloads/{str(user_id)}/[@yashoswalyo]_softmuxed_video.mkv"
+    return softmuxed
 
 
-def MergeAudio(videoPath: str, files_list: list, user_id):
+def MergeAudio(videoPath: str, files_list: list, user_id, file_names=None):
     LOGGER.info("Generating Mux Command")
-    muxcmd = []
-    muxcmd.append("ffmpeg")
-    muxcmd.append("-hide_banner")
-    videoData = ffmpeg.probe(filename=videoPath)
-    videoStreamsData = videoData.get("streams")
-    audioTracks = 0
+    export = f"downloads/{str(user_id)}/export.mkv"
+    streams, format_tags = _probe_streams(videoPath)
+    audio_disposition = [
+        f"-disposition:a:{i}"
+        for i in range(sum(1 for s in streams if s.get("codec_type") == "audio"))
+    ]
+    added_audio = []
+    for position, path in enumerate(files_list[1:], start=1):
+        display = file_names[position] if file_names and position < len(file_names) else None
+        added_audio += track_names_for_file(path, "audio", display)
+    brand = brand_args(streams, format_tags, getUserAuthor(user_id), added_audio=added_audio)
+    muxcmd = ["ffmpeg", "-y", "-hide_banner"]
     for i in files_list:
-        muxcmd.append("-i")
-        muxcmd.append(i)
-    muxcmd.append("-map")
-    muxcmd.append("0:v:0")
-    muxcmd.append("-map")
-    muxcmd.append("0:a:?")
-    audioTracks = 0
-    for i in range(len(videoStreamsData)):
-        if videoStreamsData[i]["codec_type"] == "audio":
-            muxcmd.append(f"-disposition:a:{audioTracks}")
-            muxcmd.append("0")
-            audioTracks += 1
-    fAudio = audioTracks
+        muxcmd += ["-i", i]
+    muxcmd += ["-map", "0:v:0", "-map", "0:a:?"]
+    for disposition in audio_disposition:
+        muxcmd += [disposition, "0"]
     for j in range(1, len(files_list)):
-        muxcmd.append("-map")
-        muxcmd.append(f"{j}:a")
-        muxcmd.append(f"-metadata:s:a:{audioTracks}")
-        muxcmd.append(f"title=Track {audioTracks+1} - tg@yashoswalyo")
-        audioTracks += 1
-    muxcmd.append(f"-disposition:s:a:{fAudio}")
-    muxcmd.append("default")
-    muxcmd.append("-map")
-    muxcmd.append("0:s:?")
-    muxcmd.append("-c:v")
-    muxcmd.append("copy")
-    muxcmd.append("-c:a")
-    muxcmd.append("copy")
-    muxcmd.append("-c:s")
-    muxcmd.append("copy")
-    muxcmd.append(f"downloads/{str(user_id)}/[@yashoswalyo]_export.mkv")
+        muxcmd += ["-map", f"{j}:a"]
+    # The first added audio track becomes the default one.
+    audio_count = len(audio_disposition)
+    if len(files_list) > 1:
+        muxcmd += [f"-disposition:a:{audio_count}", "default"]
+    muxcmd += [
+        "-map",
+        "0:s:?",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-c:s",
+        "copy",
+        *brand,
+        export,
+    ]
 
     LOGGER.info(muxcmd)
     process = subprocess.call(muxcmd)
     LOGGER.info(process)
-    return f"downloads/{str(user_id)}/[@yashoswalyo]_export.mkv"
+    return export
 
 
 async def cult_small_video(video_file, output_directory, start_time, end_time, format_):

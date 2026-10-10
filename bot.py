@@ -460,7 +460,9 @@ async def help_msg(c: Client, m: Message):
 2) Send two or more Your Videos Which you want to merge
 3) After sending all files select merge options
 4) Select the upload mode.
-5) Select rename if you want to give custom file name else press default**""",
+5) Select rename if you want to give custom file name else press default
+
+Set the author name written into your files with /setauthor <name> (/setauthor clear removes it).**""",
         quote=True,
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("Close 🔐", callback_data="close")]]
