@@ -11,7 +11,9 @@ if not Config.DATABASE_URL:
     )
 
 try:
-    _client = MongoClient(Config.DATABASE_URL)
+    # Fail fast (10s) instead of pymongo's 30s default, so bot commands don't hang
+    # for minutes when the database is unreachable.
+    _client = MongoClient(Config.DATABASE_URL, serverSelectionTimeoutMS=10000)
 except ConfigurationError as exc:
     raise RuntimeError(
         f"DATABASE_URL is invalid or its hostname could not be resolved: {exc}. "
@@ -210,3 +212,20 @@ def setUserAuthor(uid: int, author):
         )
     else:
         Database.mergebot.userBranding.delete_one({"_id": uid})
+
+
+def checkDatabaseConnection() -> bool:
+    """Ping MongoDB once at startup and log a clear hint if it can't be reached."""
+    try:
+        Database.client.admin.command("ping")
+        LOGGER.info("MongoDB connection OK")
+        return True
+    except Exception as e:
+        LOGGER.error(
+            "Cannot reach MongoDB: %s. Check that DATABASE_URL is correct and that "
+            "MongoDB Atlas > Network Access allows the host running the bot "
+            "(for Koyeb's free tier, allow 0.0.0.0/0). Commands will not work "
+            "until the database is reachable.",
+            e,
+        )
+        return False

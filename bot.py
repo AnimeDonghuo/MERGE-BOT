@@ -55,6 +55,7 @@ parent_id = Config.GDRIVE_FOLDER_ID
 class MergeBot(Client):
     def start(self):
         super().start()
+        database.checkDatabaseConnection()
         try:
             self.send_message(chat_id=int(Config.OWNER), text="<b>Bot Started!</b>")
         except Exception as err:
@@ -723,7 +724,7 @@ async def makeButtons(bot: Client, m: Message, db: dict):
 
 LOGCHANNEL = Config.LOGCHANNEL
 try:
-    if Config.USER_SESSION_STRING is None:
+    if not Config.USER_SESSION_STRING:  # unset or empty: no premium user session
         raise KeyError
     LOGGER.info("Starting USER Session")
     userBot = Client(
