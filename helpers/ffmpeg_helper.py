@@ -9,8 +9,30 @@ from config import Config
 from pyrogram.types import Message
 from __init__ import LOGGER
 from helpers.utils import get_path_size
-from helpers.database import getUserAuthor
+from helpers.database import getUserAuthorAsync
 from helpers.branding import brand_args, track_names_for_file
+
+
+async def _run_ffmpeg(cmd: list) -> int:
+    """Run an ffmpeg command without blocking the event loop. Returns the exit code."""
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        LOGGER.error(
+            f"ffmpeg exited with {process.returncode}: "
+            f"{stderr.decode(errors='replace')[-800:]}"
+        )
+    return process.returncode
+
+
+async def _in_thread(func, *args):
+    """Run a blocking helper (ffprobe, pymongo) in a worker thread so the event loop keeps serving."""
+    return await asyncio.get_running_loop().run_in_executor(None, func, *args)
 
 
 def _probe_streams(path: str):
@@ -46,8 +68,8 @@ async def MergeVideo(input_file: str, user_id: int, message: Message, format_: s
     brand = []
     first_file = _first_input_of_concat(input_file)
     if first_file:
-        streams, format_tags = _probe_streams(first_file)
-        brand = brand_args(streams, format_tags, getUserAuthor(user_id))
+        streams, format_tags = await _in_thread(_probe_streams, first_file)
+        brand = brand_args(streams, format_tags, await getUserAuthorAsync(user_id))
     file_generator_command = [
         "ffmpeg",
         "-y",  # overwrite a leftover output from an earlier failed run instead of prompting
@@ -102,13 +124,10 @@ async def MergeSub(filePath: str, subPath: str, user_id):
     """
     LOGGER.info("Generating mux command")
     softmuxed = f"./downloads/{str(user_id)}/softmuxed_video.mkv"
-    streams, format_tags = _probe_streams(filePath)
-    brand = brand_args(
-        streams,
-        format_tags,
-        getUserAuthor(user_id),
-        added_subs=track_names_for_file(subPath, "subtitle"),
-    )
+    streams, format_tags = await _in_thread(_probe_streams, filePath)
+    author = await getUserAuthorAsync(user_id)
+    sub_names = await _in_thread(track_names_for_file, subPath, "subtitle")
+    brand = brand_args(streams, format_tags, author, added_subs=sub_names)
     muxcmd = [
         "ffmpeg",
         "-y",
@@ -135,12 +154,15 @@ async def MergeSub(filePath: str, subPath: str, user_id):
         softmuxed,
     ]
     LOGGER.info("Muxing subtitles")
-    subprocess.call(muxcmd)
+    code = await _run_ffmpeg(muxcmd)
+    if code != 0 or not os.path.exists(softmuxed):
+        LOGGER.error("Subtitle mux failed; keeping the video without the new subtitle")
+        return filePath
     orgFilePath = shutil.move(softmuxed, filePath)
     return orgFilePath
 
 
-def MergeSubNew(filePath: str, subPath: str, user_id, file_list, file_names=None):
+async def MergeSubNew(filePath: str, subPath: str, user_id, file_list, file_names=None):
     """
     This method is for Merging Video + Subtitle(s) Together.
 
@@ -156,12 +178,13 @@ def MergeSubNew(filePath: str, subPath: str, user_id, file_list, file_names=None
     """
     LOGGER.info("Generating mux command")
     softmuxed = f"downloads/{str(user_id)}/softmuxed_video.mkv"
-    streams, format_tags = _probe_streams(filePath)
+    streams, format_tags = await _in_thread(_probe_streams, filePath)
     added_subs = []
     for position, path in enumerate(file_list[1:], start=1):
         display = file_names[position] if file_names and position < len(file_names) else None
-        added_subs += track_names_for_file(path, "subtitle", display)
-    brand = brand_args(streams, format_tags, getUserAuthor(user_id), added_subs=added_subs)
+        added_subs += await _in_thread(track_names_for_file, path, "subtitle", display)
+    author = await getUserAuthorAsync(user_id)
+    brand = brand_args(streams, format_tags, author, added_subs=added_subs)
     muxcmd = ["ffmpeg", "-y", "-hide_banner"]
     for i in file_list:
         muxcmd += ["-i", i]
@@ -186,14 +209,16 @@ def MergeSubNew(filePath: str, subPath: str, user_id, file_list, file_names=None
         f"./{softmuxed}",
     ]
     LOGGER.info("Sub muxing")
-    subprocess.call(muxcmd)
+    code = await _run_ffmpeg(muxcmd)
+    if code != 0 or not os.path.exists(softmuxed):
+        return None
     return softmuxed
 
 
-def MergeAudio(videoPath: str, files_list: list, user_id, file_names=None):
+async def MergeAudio(videoPath: str, files_list: list, user_id, file_names=None):
     LOGGER.info("Generating Mux Command")
     export = f"downloads/{str(user_id)}/export.mkv"
-    streams, format_tags = _probe_streams(videoPath)
+    streams, format_tags = await _in_thread(_probe_streams, videoPath)
     audio_disposition = [
         f"-disposition:a:{i}"
         for i in range(sum(1 for s in streams if s.get("codec_type") == "audio"))
@@ -201,8 +226,9 @@ def MergeAudio(videoPath: str, files_list: list, user_id, file_names=None):
     added_audio = []
     for position, path in enumerate(files_list[1:], start=1):
         display = file_names[position] if file_names and position < len(file_names) else None
-        added_audio += track_names_for_file(path, "audio", display)
-    brand = brand_args(streams, format_tags, getUserAuthor(user_id), added_audio=added_audio)
+        added_audio += await _in_thread(track_names_for_file, path, "audio", display)
+    author = await getUserAuthorAsync(user_id)
+    brand = brand_args(streams, format_tags, author, added_audio=added_audio)
     muxcmd = ["ffmpeg", "-y", "-hide_banner"]
     for i in files_list:
         muxcmd += ["-i", i]
@@ -229,8 +255,9 @@ def MergeAudio(videoPath: str, files_list: list, user_id, file_names=None):
     ]
 
     LOGGER.info(muxcmd)
-    process = subprocess.call(muxcmd)
-    LOGGER.info(process)
+    code = await _run_ffmpeg(muxcmd)
+    if code != 0 or not os.path.exists(export):
+        return None
     return export
 
 
@@ -375,7 +402,7 @@ async def extractAudios(path_to_file, user_id):
             extractcmd.append("copy")
             extractcmd.append(f"{extract_dir}/{output_file}")
             LOGGER.info(extractcmd)
-            subprocess.call(extractcmd)
+            await _run_ffmpeg(extractcmd)
         except Exception as e:
             LOGGER.error(f"Something went wrong: {e}")
     if get_path_size(extract_dir) > 0:
@@ -444,7 +471,7 @@ async def extractSubtitles(path_to_file, user_id):
             extractcmd.append("copy")
             extractcmd.append(f"{extract_dir}/{output_file}")
             LOGGER.info(extractcmd)
-            subprocess.call(extractcmd)
+            await _run_ffmpeg(extractcmd)
         except Exception as e:
             LOGGER.error(f"Something went wrong: {e}")
     if get_path_size(extract_dir) > 0:

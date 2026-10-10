@@ -86,7 +86,7 @@ async def mergeSub(c: Client, cb: CallbackQuery, new_file_name: str):
         vid_list.append(f"{file_dl_path}")
         name_list.append(media.file_name)
 
-    subbed_video = MergeSubNew(
+    subbed_video = await MergeSubNew(
         filePath=vid_list[0],
         subPath=vid_list[1],
         user_id=cb.from_user.id,
@@ -182,7 +182,7 @@ async def mergeSub(c: Client, cb: CallbackQuery, new_file_name: str):
             "⭕ Merged Video is corrupted \n\n<i>Try setting custom thumbnail</i>",
         )
         return
-    await uploadVideo(
+    uploaded = await uploadVideo(
         c=c,
         cb=cb,
         merged_video_path=merged_video_path,
@@ -193,7 +193,9 @@ async def mergeSub(c: Client, cb: CallbackQuery, new_file_name: str):
         file_size=os.path.getsize(merged_video_path),
         upload_mode=UPLOAD_AS_DOC[f"{cb.from_user.id}"],
     )
-    await cb.message.delete(True)
+    if uploaded:
+        # remove the status panel only once the file is really in the chat
+        await cb.message.delete(True)
     await delete_all(root=f"downloads/{str(cb.from_user.id)}")
     queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
     formatDB.update({cb.from_user.id: None})

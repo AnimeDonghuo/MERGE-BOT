@@ -200,7 +200,7 @@ chat_id=cb.from_user.id, message_ids=list_message_ids ):
         formatDB.update({cb.from_user.id: None})
         await cb.message.edit("⭕ Merged Video is corrupted")
         return
-    await uploadVideo(
+    uploaded = await uploadVideo(
         c=c,
         cb=cb,
         merged_video_path=merged_video_path,
@@ -211,7 +211,9 @@ chat_id=cb.from_user.id, message_ids=list_message_ids ):
         file_size=os.path.getsize(merged_video_path),
         upload_mode=UPLOAD_AS_DOC[f"{cb.from_user.id}"],
     )
-    await cb.message.delete(True)
+    if uploaded:
+        # remove the status panel only once the file is really in the chat
+        await cb.message.delete(True)
     await delete_all(root=f"downloads/{str(cb.from_user.id)}")
     queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
     formatDB.update({cb.from_user.id: None})

@@ -223,8 +223,9 @@ async def rclone_process_display(
     sleeps = False  #
     start = time.time()  # Get current time
     while True:
-        data: str = process.stdout.readline().decode()
-        data = data.strip()
+        # readline() blocks until rclone prints a line; run it in a thread so the bot stays responsive
+        raw = await asyncio.get_running_loop().run_in_executor(None, process.stdout.readline)
+        data: str = raw.decode().strip()
         mat = re.findall("Transferred:.*ETA.*", data)
         if mat is not None:
             if len(mat) > 0:

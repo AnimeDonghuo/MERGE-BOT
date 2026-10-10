@@ -75,7 +75,7 @@ async def mergeAudio(c: Client, cb: CallbackQuery, new_file_name: str):
         files_list.append(f"{file_dl_path}")
         name_list.append(media.file_name)
 
-    muxed_video = MergeAudio(files_list[0], files_list, cb.from_user.id, file_names=name_list)
+    muxed_video = await MergeAudio(files_list[0], files_list, cb.from_user.id, file_names=name_list)
     if muxed_video is None:
         await cb.message.edit("❌ Failed to add audio to video !")
         await delete_all(root=f"downloads/{str(cb.from_user.id)}")
@@ -166,7 +166,7 @@ async def mergeAudio(c: Client, cb: CallbackQuery, new_file_name: str):
             "⭕ Merged Video is corrupted \n\n<i>Try setting custom thumbnail</i>",
         )
         return
-    await uploadVideo(
+    uploaded = await uploadVideo(
         c=c,
         cb=cb,
         merged_video_path=merged_video_path,
@@ -177,7 +177,9 @@ async def mergeAudio(c: Client, cb: CallbackQuery, new_file_name: str):
         file_size=os.path.getsize(merged_video_path),
         upload_mode=UPLOAD_AS_DOC[f"{cb.from_user.id}"],
     )
-    await cb.message.delete(True)
+    if uploaded:
+        # remove the status panel only once the file is really in the chat
+        await cb.message.delete(True)
     await delete_all(root=f"downloads/{str(cb.from_user.id)}")
     queueDB.update({cb.from_user.id: {"videos": [], "subtitles": [], "audios": []}})
     formatDB.update({cb.from_user.id: None})

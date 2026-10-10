@@ -1,3 +1,5 @@
+import asyncio
+
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError, DuplicateKeyError
 from pyrogram.types import CallbackQuery
@@ -229,3 +231,8 @@ def checkDatabaseConnection() -> bool:
             e,
         )
         return False
+
+
+async def getUserAuthorAsync(uid: int):
+    """getUserAuthor() without blocking the event loop (pymongo is synchronous)."""
+    return await asyncio.get_running_loop().run_in_executor(None, getUserAuthor, uid)

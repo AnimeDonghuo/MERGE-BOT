@@ -30,9 +30,9 @@ from plugins.streams_extractor import streamsExtractor
 from plugins.usettings import userSettings
 
 
-def _default_name(uid: int) -> str:
+async def _default_name(uid: int) -> str:
     """Default output file name for this user (uses the author name they set)."""
-    return default_file_name(database.getUserAuthor(uid))
+    return default_file_name(await database.getUserAuthorAsync(uid))
 
 
 @Client.on_callback_query()
@@ -73,8 +73,9 @@ async def callback_handler(c: Client, cb: CallbackQuery):
             formatDB.update({cb.from_user.id: None})
             return
         UPLOAD_TO_DRIVE.update({f"{cb.from_user.id}": True})
+        default_name = await _default_name(cb.from_user.id)
         await cb.message.edit(
-            text=f"Okay I'll upload to drive\nDo you want to rename? Default file name is **{_default_name(cb.from_user.id)}**",
+            text=f"Okay I'll upload to drive\nDo you want to rename? Default file name is **{default_name}**",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
@@ -105,8 +106,9 @@ async def callback_handler(c: Client, cb: CallbackQuery):
 
     elif cb.data == "document":
         UPLOAD_AS_DOC.update({f"{cb.from_user.id}": True})
+        default_name = await _default_name(cb.from_user.id)
         await cb.message.edit(
-            text=f"Do you want to rename? Default file name is **{_default_name(cb.from_user.id)}**",
+            text=f"Do you want to rename? Default file name is **{default_name}**",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
@@ -121,8 +123,9 @@ async def callback_handler(c: Client, cb: CallbackQuery):
 
     elif cb.data == "video":
         UPLOAD_AS_DOC.update({f"{cb.from_user.id}": False})
+        default_name = await _default_name(cb.from_user.id)
         await cb.message.edit(
-            text=f"Do you want to rename? Default file name is **{_default_name(cb.from_user.id)}**",
+            text=f"Do you want to rename? Default file name is **{default_name}**",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
@@ -151,8 +154,9 @@ async def callback_handler(c: Client, cb: CallbackQuery):
     elif cb.data.startswith("rename_"):
         user = UserSettings(cb.from_user.id, cb.from_user.first_name)
         if "YES" in cb.data:
+            default_name = await _default_name(cb.from_user.id)
             await cb.message.edit(
-                f"Current filename: **{_default_name(cb.from_user.id)}**\n\nSend me new file name without extension: You have 1 minute"
+                f"Current filename: **{default_name}**\n\nSend me new file name without extension: You have 1 minute"
             )
             res: Message = await c.listen(chat_id=cb.message.chat.id, filters=filters.text, listener_type=ListenerTypes.MESSAGE, timeout=120, user_id=cb.from_user.id)
             if res.text:
@@ -167,8 +171,9 @@ async def callback_handler(c: Client, cb: CallbackQuery):
             return
 
         if "NO" in cb.data:
+            default_name = await _default_name(cb.from_user.id)
             new_file_name = (
-                f"downloads/{str(cb.from_user.id)}/{_default_name(cb.from_user.id)}"
+                f"downloads/{str(cb.from_user.id)}/{default_name}"
             )
             if user.merge_mode == 1:
                 await mergeNow(c, cb, new_file_name)

@@ -11,7 +11,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 from helpers.branding import MAX_AUTHOR_LENGTH, clean_author, default_file_name
-from helpers.database import getUserAuthor, setUserAuthor
+from helpers.database import getUserAuthorAsync, setUserAuthor
 
 CLEAR_WORDS = {"clear", "remove", "reset", "none", "off"}
 
@@ -26,7 +26,7 @@ USAGE = (
 @Client.on_message(filters.command(["setauthor"]) & filters.private)
 async def set_author_handler(c: Client, m: Message):
     parts = (m.text or "").split(maxsplit=1)
-    current = getUserAuthor(m.from_user.id)
+    current = await getUserAuthorAsync(m.from_user.id)
 
     if len(parts) < 2:
         if current:

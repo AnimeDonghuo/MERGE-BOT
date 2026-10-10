@@ -4,7 +4,6 @@
 
 import logging
 import math
-import os
 import time
 
 from pyrogram.errors.exceptions import FloodWait
@@ -26,11 +25,22 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 
 class Progress:
+    """Progress panel for uploads and downloads.
+
+    Pyrogram awaits the progress callback for every transferred chunk, so the
+    callback must stay cheap: it only edits the panel at most once every
+    EDIT_SLEEP_TIME_OUT seconds, never sleeps, and skips edits while Telegram
+    asks us to back off (FloodWait).
+    """
+
     def __init__(self, from_user, client, mess: Message):
         self._from_user = from_user
         self._client = client
         self._mess = mess
         self._cancelled = False
+        self._cancel_announced = False
+        self._last_edit = 0.0
+        self._resume_at = 0.0  # no panel edits before this time (after FloodWait)
 
     @property
     def is_cancelled(self):
@@ -41,79 +51,81 @@ class Progress:
         return self._cancelled
 
     async def progress_for_pyrogram(self, current, total, ud_type, start, count=""):
-        chat_id = self._mess.chat.id
-        mes_id = self._mess.id
-        from_user = self._from_user
+        if self.is_cancelled:
+            if not self._cancel_announced:
+                self._cancel_announced = True
+                LOGGER.info("stopping ")
+                try:
+                    await self._mess.edit(
+                        f"⛔ **Cancelled** ⛔ \n\n `{ud_type}` ({humanbytes(total)})"
+                    )
+                except Exception as ou:
+                    logger.info(ou)
+            await self._client.stop_transmission()
+            return
+
         now = time.time()
-        diff = now - start
-        reply_markup = InlineKeyboardMarkup(
+        finished = current >= total
+        if not finished:
+            if now - self._last_edit < EDIT_SLEEP_TIME_OUT or now < self._resume_at:
+                return
+        self._last_edit = now
+
+        diff = max(now - start, 0.001)
+        total = total or 1
+        percentage = current * 100 / total
+        speed = current / diff
+        time_to_completion = round((total - current) / speed) * 1000 if speed else 0
+        estimated_total_time = TimeFormatter(milliseconds=time_to_completion) or "0 s"
+
+        progress = "\n<code>[{0}{1}] {2}%</code>\n".format(
+            "".join([FINISHED_PROGRESS_STR for i in range(math.floor(percentage / 5))]),
+            "".join(
+                [
+                    UN_FINISHED_PROGRESS_STR
+                    for i in range(20 - math.floor(percentage / 5))
+                ]
+            ),
+            round(percentage, 2),
+        )
+        tmp = (
+            progress
+            + "\n**⌧ Total 🗃:**` 〚{1}〛`\n**⌧ Done ✅ :**` 〚{0}〛`\n**⌧ Speed 📊 :** ` 〚{2}/s〛`\n**⌧ ETA 🔃 :**` 〚{3}〛`\n {4}".format(
+                humanbytes(current),
+                humanbytes(total),
+                humanbytes(speed),
+                estimated_total_time,
+                count,
+            )
+        )
+        try:
+            if not self._mess.photo:
+                await self._mess.edit_text(
+                    text="{}\n {}".format(ud_type, tmp),
+                    reply_markup=self._cancel_markup(),
+                )
+            else:
+                await self._mess.edit_caption(caption="{}\n {}".format(ud_type, tmp))
+        except FloodWait as fd:
+            wait = getattr(fd, "value", None) or getattr(fd, "x", 0) or 0
+            logger.warning(f"FloodWait on progress edit, skipping edits for {wait}s")
+            self._resume_at = time.time() + wait
+        except Exception as ou:
+            logger.info(ou)
+
+    def _cancel_markup(self):
+        return InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
                         "⛔ Cancel ⛔",
                         callback_data=(
-                            f"gUPcancel/{chat_id}/{mes_id}/{from_user}"
+                            f"gUPcancel/{self._mess.chat.id}/{self._mess.id}/{self._from_user}"
                         ).encode("UTF-8"),
                     )
                 ]
             ]
         )
-        if self.is_cancelled:
-            LOGGER.info("stopping ")
-            await self._mess.edit(
-                f"⛔ **Cancelled** ⛔ \n\n `{ud_type}` ({humanbytes(total)})"
-            )
-            await self._client.stop_transmission()
-
-        if round(diff % float(EDIT_SLEEP_TIME_OUT)) == 0 or current == total:
-            # if round(current / total * 100, 0) % 5 == 0:
-            percentage = current * 100 / total
-            speed = current / diff
-            elapsed_time = round(diff) * 1000
-            time_to_completion = round((total - current) / speed) * 1000
-            estimated_total_time = time_to_completion
-
-            elapsed_time = TimeFormatter(milliseconds=elapsed_time)
-            estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
-
-            progress = "\n<code>[{0}{1}] {2}%</code>\n".format(
-                "".join(
-                    [FINISHED_PROGRESS_STR for i in range(math.floor(percentage / 5))]
-                ),
-                "".join(
-                    [
-                        UN_FINISHED_PROGRESS_STR
-                        for i in range(20 - math.floor(percentage / 5))
-                    ]
-                ),
-                round(percentage, 2),
-            )
-            # cpu = "{psutil.cpu_percent()}%"
-            tmp = (
-                progress
-                + "\n**⌧ Total 🗃:**` 〚{1}〛`\n**⌧ Done ✅ :**` 〚{0}〛`\n**⌧ Speed 📊 :** ` 〚{2}/s〛`\n**⌧ ETA 🔃 :**` 〚{3}〛`\n {4}".format(
-                    humanbytes(current),
-                    humanbytes(total),
-                    humanbytes(speed),
-                    # elapsed_time if elapsed_time != '' else "0 s",
-                    estimated_total_time if estimated_total_time != "" else "0 s",
-                    count
-                )
-            )
-            try:
-                if not self._mess.photo:
-                    await self._mess.edit_text(
-                        text="{}\n {}".format(ud_type, tmp), reply_markup=reply_markup
-                    )
-                else:
-                    await self._mess.edit_caption(
-                        caption="{}\n {}".format(ud_type, tmp)
-                    )
-            except FloodWait as fd:
-                logger.warning(f"{fd}")
-                time.sleep(fd.x)
-            except Exception as ou:
-                logger.info(ou)
 
 
 def humanbytes(size):
