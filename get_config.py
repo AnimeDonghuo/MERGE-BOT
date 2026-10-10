@@ -22,7 +22,7 @@ except Exception as e:
     pass
 load_dotenv(
     "config.env",
-    override=True,
+    override=False,  # environment variables take precedence over config.env
 )
 # tired of redeploying :(
 UPSTREAM_REPO = os.environ.get('UPSTREAM_REPO')

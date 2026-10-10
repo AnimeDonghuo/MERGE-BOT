@@ -1,8 +1,10 @@
 from dotenv import load_dotenv
 
+# override=False: variables set in the environment (Koyeb, Heroku, Docker) win
+# over values in config.env. config.env is only a local-development fallback.
 load_dotenv(
     "config.env",
-    override=True,
+    override=False,
 )
 import asyncio
 import os

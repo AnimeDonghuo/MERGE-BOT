@@ -1,12 +1,27 @@
 from pymongo import MongoClient
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import ConfigurationError, DuplicateKeyError
 from pyrogram.types import CallbackQuery
 from config import Config
 from __init__ import LOGGER, MERGE_MODE
 
+if not Config.DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is not set. Add it to your deployment's environment variables "
+        "(e.g. Koyeb service settings) or to config.env for local runs."
+    )
+
+try:
+    _client = MongoClient(Config.DATABASE_URL)
+except ConfigurationError as exc:
+    raise RuntimeError(
+        f"DATABASE_URL is invalid or its hostname could not be resolved: {exc}. "
+        "Copy the connection string again from MongoDB Atlas (Connect > Drivers) "
+        "and make sure the value set in the environment is the one you expect."
+    ) from exc
+
 
 class Database(object):
-    client = MongoClient(Config.DATABASE_URL)
+    client = _client
     mergebot = client.MergeBot
 
 
